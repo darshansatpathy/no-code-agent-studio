@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "no-code-agent-studio"
+version = "0.1.0"
+description = "Agents declared in YAML, statically analyzed, compiled to LangGraph, versioned and promoted through dev, staging and prod with test and risk gates."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Darshan Kumar Satpathy" }]
+keywords = ["agents", "langgraph", "no-code", "low-code", "agentic-ai", "llmops", "yaml", "kubernetes"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "langgraph>=1.0",
+  "langgraph-checkpoint-sqlite>=2.0",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+postgres = ["langgraph-checkpoint-postgres>=2.0", "psycopg[binary]>=3.1"]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "types-PyYAML>=6.0",
+  "langgraph-checkpoint-postgres>=2.0",
+  "psycopg[binary]>=3.1",
+  "pip-audit>=2.7",
+]
+
+[project.scripts]
+studio = "agentstudio.cli:main"
+
+[project.urls]
+Repository = "https://github.com/darshansatpathy/no-code-agent-studio"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentstudio"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"agents" = "agentstudio/examples"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["postgres: needs PostgreSQL (STUDIO_TEST_DATABASE_URL)"]
+filterwarnings = ["error::ResourceWarning", "ignore:Using `httpx` with `starlette.testclient`"]
+
+[tool.coverage.run]
+source = ["agentstudio"]
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B011"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+packages = ["agentstudio"]
