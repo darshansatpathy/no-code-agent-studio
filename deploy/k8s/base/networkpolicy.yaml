@@ -1,0 +1,17 @@
+# Ingress only on the HTTP port. Egress only to DNS, PostgreSQL and HTTPS (model endpoints).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-studio
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - {port: 8080, protocol: TCP}
+  egress:
+    - ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+        - {port: 5432, protocol: TCP}
+        - {port: 443, protocol: TCP}

@@ -1,0 +1,14 @@
+# Single replica, in-memory store, the bundled example agents promoted to every environment.
+# Build the image as agent-studio:dev and load it into your cluster (kind load docker-image ...).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agent-studio
+resources:
+  - namespace.yaml
+  - ../../base
+patches:
+  - target: {kind: Deployment, name: agent-studio}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: STUDIO_BOOTSTRAP_PROMOTE, value: "dev,staging,prod"}

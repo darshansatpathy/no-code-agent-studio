@@ -1,0 +1,29 @@
+# The studio with PostgreSQL: versions, environments, audit and run checkpoints are durable.
+# Open http://localhost:8080/studio
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: studio
+      POSTGRES_PASSWORD: studio-local-only
+      POSTGRES_DB: studio
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio -d studio"]
+      interval: 2s
+      retries: 20
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+
+  studio:
+    build: .
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ["8080:8080"]
+    environment:
+      STUDIO_STORE: postgres
+      STUDIO_DATABASE_URL: postgresql://studio:studio-local-only@postgres:5432/studio
+      STUDIO_BOOTSTRAP_DIR: /app/agents
+      STUDIO_BOOTSTRAP_PROMOTE: dev,staging,prod
+
+volumes:
+  pg-data:
