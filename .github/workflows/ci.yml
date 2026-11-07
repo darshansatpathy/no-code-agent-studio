@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, types, tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: studio
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: studio
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U studio -d studio"
+          --health-interval 2s --health-timeout 2s --health-retries 20
+    env:
+      STUDIO_TEST_DATABASE_URL: postgresql://studio:ci-only@localhost:5432/studio
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Mypy (strict)
+        run: mypy
+      - name: Tests with coverage (including PostgreSQL)
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=90
+      - name: Every agent spec validates and passes its tests
+        run: studio check agents
+      - name: Demo runs end to end
+        run: studio demo
+
+  manifests:
+    name: Kubernetes manifests build and validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+      - name: Build and validate each overlay
+        run: |
+          for overlay in dev prod; do
+            kubectl kustomize "deploy/k8s/overlays/$overlay" > "/tmp/$overlay.yaml"
+            kubeconform -strict -summary -kubernetes-version 1.31.0 "/tmp/$overlay.yaml"
+          done
+
+  kubernetes:
+    name: Deploys to Kubernetes (kind) and serves agents
+    runs-on: ubuntu-24.04
+    needs: manifests
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: docker build -t agent-studio:dev .
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: studio
+      - name: Load image into the cluster
+        run: kind load docker-image agent-studio:dev --name studio
+      - name: Deploy the dev overlay
+        run: |
+          kubectl apply -k deploy/k8s/overlays/dev
+          kubectl -n agent-studio rollout status deploy/agent-studio --timeout=180s
+      - name: Publish, promote and run through the Service
+        run: |
+          set -euo pipefail
+          kubectl -n agent-studio port-forward svc/agent-studio 8080:80 > /tmp/port-forward.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
+          H=(-H 'content-type: application/json' -H 'X-User-Id: ci' \
+             -H 'X-User-Roles: author,reviewer,release-manager,operator,approver')
+          curl -fsS localhost:8080/v1/agents "${H[@]}" | tee /tmp/agents.json
+          grep -q '"prod":"1.1.0"' /tmp/agents.json
+          RUN=$(curl -fsS localhost:8080/v1/agents/refund-desk/runs "${H[@]}" \
+                -d '{"input": {"message": "O-5002 arrived broken"}}')
+          echo "$RUN"; echo "$RUN" | grep -q '"status":"awaiting_approval"'
+          ID=$(echo "$RUN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+          DONE=$(curl -fsS "localhost:8080/v1/runs/$ID/approval" "${H[@]}" -d '{"approved": true}')
+          echo "$DONE"; echo "$DONE" | grep -q '"status":"completed"'
+          curl -fsS localhost:8080/studio | grep -q "Agent Studio"
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n agent-studio get all
+          kubectl -n agent-studio describe pods
+          kubectl -n agent-studio logs deploy/agent-studio --tail=200 || true
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[postgres]" pip-audit
+      - name: pip-audit
+        run: pip-audit --skip-editable
