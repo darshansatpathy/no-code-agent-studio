@@ -1,0 +1,146 @@
+apiVersion: studio/v1
+kind: Agent
+metadata:
+  name: refund-desk
+  version: 1.0.0
+  description: Refunds delivered orders for damaged or missing goods; larger refunds wait for a person.
+  owner: customer-care
+  labels: {domain: retail, tier: customer-facing}
+
+spec:
+  input:
+    message: string
+
+  state:
+    order_id: {type: string}
+    reason: {type: string, default: other}
+    order: {type: object}
+    amount: {type: number, default: 0}
+    refund: {type: object}
+    reply: {type: string, default: ""}
+    error: {type: string, default: ""}
+
+  tools:
+    - use: orders.lookup_order
+    - use: payments.issue_refund
+      approval: "args.amount > 100"
+      limits:
+        amount: {max: 500}
+
+  limits: {max_steps: 10, max_tool_calls: 3}
+  entry: find_order
+
+  nodes:
+    - id: find_order
+      type: extract
+      input: input.message
+      fields:
+        order_id: '\b(O-[0-9]{4})\b'
+
+    - id: reason
+      type: classify
+      input: input.message
+      output: reason
+      labels:
+        damaged: [damaged, broken, cracked, "arrived damaged"]
+        not_received: ["never arrived", "not received", missing, lost]
+        changed_mind: ["changed my mind", "no longer need", return]
+      default: other
+
+    - id: lookup
+      type: tool
+      tool: orders.lookup_order
+      args: {order_id: order_id}
+      output: order
+      on_error: no_order
+
+    - id: amount
+      type: set
+      values:
+        amount: "round(order.total - order.refunded, 2)"
+
+    - id: refund
+      type: tool
+      tool: payments.issue_refund
+      args: {order_id: order_id, amount: amount, reason: reason}
+      output: refund
+      on_error: review
+
+    - id: done_refund
+      type: respond
+      template: "We have refunded {{ amount }} EUR for order {{ order_id }} (reference {{ refund.id }}). It will reach your account in 3 to 5 working days."
+
+    - id: review
+      type: respond
+      template: "Thank you. A colleague will review the refund for order {{ order_id }} and reply within one working day."
+
+    - id: not_delivered
+      type: respond
+      template: "Order {{ order_id }} is still on its way, so we cannot refund it yet. If it has not arrived in 5 days, reply and we will help."
+
+    - id: already_refunded
+      type: respond
+      template: "Order {{ order_id }} has already been refunded in full."
+
+    - id: ask_order
+      type: respond
+      template: "Could you send us your order number? It starts with O- and is in your confirmation email."
+
+    - id: no_order
+      type: respond
+      template: "We could not find order {{ order_id }}. Please check the number in your confirmation email."
+
+  edges:
+    - {from: find_order, to: reason, when: "order_id != null"}
+    - {from: find_order, to: ask_order}
+    - {from: reason, to: lookup}
+    - {from: lookup, to: not_delivered, when: "order.status != 'delivered' and reason != 'not_received'"}
+    - {from: lookup, to: amount}
+    - {from: amount, to: already_refunded, when: "amount <= 0"}
+    - {from: amount, to: refund, when: "reason in ['damaged', 'not_received']"}
+    - {from: amount, to: review}
+    - {from: refund, to: done_refund}
+    - {from: done_refund, to: END}
+    - {from: review, to: END}
+    - {from: not_delivered, to: END}
+    - {from: already_refunded, to: END}
+    - {from: ask_order, to: END}
+    - {from: no_order, to: END}
+
+  tests:
+    - name: small damaged order is refunded at once
+      input: {message: "Order O-5001 arrived damaged"}
+      expect:
+        path: [find_order, reason, lookup, amount, refund, done_refund]
+        tools: [orders.lookup_order, payments.issue_refund]
+        state: {amount: 49.9, reason: damaged}
+        reply_contains: ["49.90 EUR", "RF-0001"]
+    - name: refund over 100 EUR waits for a person
+      input: {message: "O-5002 arrived broken"}
+      expect: {status: awaiting_approval, not_tools: [payments.issue_refund]}
+    - name: approved refund over 100 EUR
+      input: {message: "O-5002 arrived broken"}
+      approvals: [true]
+      expect: {tools: [orders.lookup_order, payments.issue_refund], reply_contains: ["189.00 EUR"]}
+    - name: denied refund goes to a colleague
+      input: {message: "O-5002 arrived broken"}
+      approvals: [false]
+      expect: {path: [find_order, reason, lookup, amount, refund, review], not_tools: [payments.issue_refund]}
+    - name: refund above the hard limit is never issued
+      input: {message: "My order O-5003 never arrived"}
+      expect:
+        path: [find_order, reason, lookup, amount, refund, review]
+        not_tools: [payments.issue_refund]
+        state: {error: "limit: amount 640.0 is above the limit 500"}
+    - name: order still in transit
+      input: {message: "I changed my mind about O-5004"}
+      expect: {path: [find_order, reason, lookup, not_delivered], not_tools: [payments.issue_refund]}
+    - name: changed mind on a delivered order goes to review
+      input: {message: "I changed my mind about O-5001"}
+      expect: {path: [find_order, reason, lookup, amount, review], not_tools: [payments.issue_refund]}
+    - name: no order number
+      input: {message: "My parcel arrived damaged"}
+      expect: {path: [find_order, ask_order], tools: []}
+    - name: unknown order
+      input: {message: "O-9999 is broken"}
+      expect: {path: [find_order, reason, lookup, no_order], reply_contains: ["could not find order O-9999"]}

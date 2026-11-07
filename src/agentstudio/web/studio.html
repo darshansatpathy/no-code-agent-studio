@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Studio</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --fg: #1b1f24; --muted: #5b6573; --line: #d9dee5; --accent: #2457c5;
+          --ok: #1d7a46; --warn: #a15c00; --bad: #b42318; --mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1216; --panel: #171b21; --fg: #e6e9ee; --muted: #9aa4b2; --line: #2b313a; --accent: #7aa2ff;
+            --ok: #4cc38a; --warn: #f0a640; --bad: #ff7a70; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  header label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  input, select, textarea, button { font: inherit; color: inherit; }
+  input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  main { display: grid; grid-template-columns: 240px minmax(0, 1fr) 340px; gap: 12px; padding: 12px 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .agent { padding: 8px; border-radius: 8px; cursor: pointer; }
+  .agent:hover, .agent.active { background: var(--bg); }
+  .agent b { display: block; }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; margin: 2px 4px 0 0; color: var(--muted); }
+  .badge.prod { color: var(--ok); border-color: var(--ok); }
+  textarea { width: 100%; min-height: 420px; font: 12.5px/1.5 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; resize: vertical; tab-size: 2; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .issues li { padding: 4px 6px; border-left: 3px solid var(--line); margin: 4px 0; cursor: pointer; font-size: 13px; }
+  .issues li.error { border-color: var(--bad); }
+  .issues li.warning { border-color: var(--warn); }
+  .issues li.ok { border-color: var(--ok); cursor: default; }
+  #diagram { overflow: auto; border: 1px dashed var(--line); border-radius: 8px; padding: 8px; min-height: 80px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 4px; vertical-align: top; }
+  .risk-high { color: var(--bad); font-weight: 600; }
+  .risk-medium { color: var(--warn); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .status { font-size: 13px; min-height: 18px; }
+  .status.bad { color: var(--bad); }
+  .status.good { color: var(--ok); }
+  pre { white-space: pre-wrap; font: 12px var(--mono); margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Studio</h1>
+  <label>User <input id="user" value="ana" size="10"></label>
+  <label>Roles <input id="roles" value="author,reviewer,release-manager,operator,approver" size="44"></label>
+  <span class="muted">Sent as X-User-Id and X-User-Roles. In production the gateway sets them.</span>
+</header>
+<main>
+  <section>
+    <h2>Agents</h2>
+    <ul id="agents"></ul>
+    <div class="row"><button class="secondary" id="new">New agent</button></div>
+  </section>
+
+  <section>
+    <h2>Spec</h2>
+    <textarea id="editor" spellcheck="false" aria-label="Agent spec YAML"></textarea>
+    <div class="row">
+      <button id="validate">Validate</button>
+      <button id="test" class="secondary">Run tests</button>
+      <button id="publish" class="secondary">Publish</button>
+      <input id="note" placeholder="Release note" size="30">
+      <span id="status" class="status" role="status"></span>
+    </div>
+    <ul id="issues" class="issues"></ul>
+    <h2 style="margin-top:12px">Graph</h2>
+    <div id="diagram" class="muted">Validate to draw the graph.</div>
+  </section>
+
+  <section>
+    <h2>Versions</h2>
+    <div id="versions" class="muted">Select an agent.</div>
+    <h2 style="margin-top:14px">Compare</h2>
+    <div class="row">
+      <select id="from" aria-label="From version"></select> → <select id="to" aria-label="To version"></select>
+      <button class="secondary" id="compare">Diff</button>
+    </div>
+    <div id="diff"></div>
+    <h2 style="margin-top:14px">Audit</h2>
+    <ul id="audit" class="muted"></ul>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+                  set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } } };
+  for (const k of ["user", "roles"]) { const v = store.get("studio." + k); if (v) $(k).value = v;
+    $(k).addEventListener("change", () => store.set("studio." + k, $(k).value)); }
+  if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "strict",
+    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
+
+  let current = null;
+  const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+  const status = (text, kind) => { $("status").textContent = text; $("status").className = "status " + (kind || ""); };
+
+  async function api(method, path, body) {
+    const res = await fetch(path, { method, headers: { "content-type": "application/json",
+      "X-User-Id": $("user").value, "X-User-Roles": $("roles").value }, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { const err = new Error(data.detail || res.statusText); err.data = data; throw err; }
+    return data;
+  }
+
+  function showIssues(issues, okText) {
+    const ul = $("issues"); ul.replaceChildren();
+    if (!issues.length && okText) { ul.append(el("li", okText, "ok")); return; }
+    for (const i of issues) {
+      const li = el("li", `${i.level}${i.line ? " · line " + i.line : ""}: ${i.message}${i.path ? "  (" + i.path + ")" : ""}`, i.level);
+      if (i.line) li.addEventListener("click", () => jumpTo(i.line));
+      ul.append(li);
+    }
+  }
+  function jumpTo(line) {
+    const ta = $("editor"), lines = ta.value.split("\n");
+    const start = lines.slice(0, line - 1).join("\n").length + (line > 1 ? 1 : 0);
+    ta.focus(); ta.setSelectionRange(start, start + (lines[line - 1] || "").length);
+    ta.scrollTop = (line - 5) * 19;
+  }
+  async function draw(text) {
+    if (!window.mermaid) { $("diagram").textContent = "Diagram library not loaded."; return; }
+    try { const { svg } = await mermaid.render("g" + Date.now(), text); $("diagram").innerHTML = svg; }
+    catch { $("diagram").textContent = "Could not draw this graph."; }
+  }
+
+  $("validate").addEventListener("click", async () => {
+    status("Validating…");
+    try {
+      const r = await api("POST", "/v1/specs/validate", { yaml: $("editor").value });
+      showIssues(r.issues, "No issues.");
+      status(r.ok ? `Valid: ${r.name} ${r.version}` : "Spec has errors", r.ok ? "good" : "bad");
+      if (r.mermaid) draw(r.mermaid);
+    } catch (e) { status(e.message, "bad"); }
+  });
+  $("test").addEventListener("click", async () => {
+    status("Running tests…");
+    try {
+      const r = await api("POST", "/v1/specs/test", { yaml: $("editor").value });
+      const ul = $("issues"); ul.replaceChildren();
+      for (const t of r.results) ul.append(el("li", `${t.passed ? "pass" : "FAIL"} · ${t.name}${t.failures.length ? " — " + t.failures.join("; ") : ""}`, t.passed ? "ok" : "error"));
+      status(`${r.passed}/${r.total} tests passed`, r.ok ? "good" : "bad");
+    } catch (e) { status(e.message, "bad"); if (e.data && e.data.issues) showIssues(e.data.issues); }
+  });
+  $("publish").addEventListener("click", async () => {
+    status("Publishing…");
+    try {
+      const r = await api("POST", "/v1/agents", { yaml: $("editor").value, note: $("note").value });
+      status(r.created ? `Published ${r.version.name} ${r.version.version} (tests ${r.tests.passed}/${r.tests.total})` : "Already published, unchanged", "good");
+      await loadAgents(); await openAgent(r.version.name);
+    } catch (e) { status(e.message, "bad"); if (e.data && e.data.issues) showIssues(e.data.issues); }
+  });
+  $("new").addEventListener("click", () => {
+    $("editor").value = `apiVersion: studio/v1\nkind: Agent\nmetadata:\n  name: my-agent\n  version: 0.1.0\n  description: What this agent does.\n  owner: my-team\nspec:\n  input:\n    message: string\n  state:\n    reply: {type: string, default: ""}\n  entry: answer\n  nodes:\n    - id: answer\n      type: respond\n      template: "You said: {{ input.message }}"\n  edges:\n    - {from: answer, to: END}\n  tests:\n    - name: echoes the message\n      input: {message: hello}\n      expect: {reply_contains: [hello]}\n`;
+    current = null; status("New spec: edit, validate, publish.");
+  });
+
+  async function loadAgents() {
+    const r = await api("GET", "/v1/agents");
+    const ul = $("agents"); ul.replaceChildren();
+    for (const a of r.agents) {
+      const li = el("li", undefined, "agent" + (a.name === current ? " active" : ""));
+      li.append(el("b", a.name), el("span", `latest ${a.latest} · ${a.versions} version(s)`, "muted"));
+      const badges = el("div");
+      for (const env of r.environments) if (a.environments[env]) badges.append(el("span", `${env} ${a.environments[env]}`, "badge " + env));
+      li.append(badges); li.addEventListener("click", () => openAgent(a.name)); ul.append(li);
+    }
+  }
+  async function openAgent(name) {
+    current = name; await loadAgents();
+    const a = await api("GET", `/v1/agents/${encodeURIComponent(name)}`);
+    const latest = a.versions[a.versions.length - 1];
+    const v = await api("GET", `/v1/agents/${encodeURIComponent(name)}/versions/${latest.version}`);
+    $("editor").value = v.spec_yaml; draw(v.mermaid); showIssues([]);
+    const box = $("versions"); box.replaceChildren(); box.className = "";
+    const table = el("table"); const head = el("tr");
+    for (const h of ["Version", "Tests", "Env", "Promote"]) head.append(el("th", h));
+    table.append(head);
+    for (const ver of [...a.versions].reverse()) {
+      const tr = el("tr");
+      const envs = ["dev", "staging", "prod"].filter((e) => a.environments[e] === ver.version).join(", ");
+      tr.append(el("td", ver.version), el("td", `${ver.tests_passed}/${ver.tests_total}`), el("td", envs || "—"));
+      const td = el("td");
+      for (const env of ["dev", "staging", "prod"]) {
+        const b = el("button", env, "secondary"); b.style.padding = "2px 8px"; b.style.margin = "1px";
+        b.addEventListener("click", () => promote(name, ver.version, env)); td.append(b);
+      }
+      tr.append(td); table.append(tr);
+    }
+    box.append(table);
+    for (const sel of [$("from"), $("to")]) { sel.replaceChildren(); for (const ver of a.versions) sel.append(el("option", ver.version)); }
+    if (a.versions.length > 1) $("from").value = a.versions[a.versions.length - 2].version;
+    $("to").value = latest.version; $("diff").replaceChildren();
+    const audit = await api("GET", `/v1/agents/${encodeURIComponent(name)}/audit`);
+    $("audit").replaceChildren(...audit.audit.slice(0, 12).map((x) => el("li",
+      `${new Date(x.at * 1000).toLocaleString()} · ${x.actor} ${x.action} ${x.version}${x.env ? " → " + x.env : ""}`)));
+  }
+  async function promote(name, version, env, ack) {
+    status(`Promoting ${version} to ${env}…`);
+    try {
+      await api("POST", `/v1/agents/${encodeURIComponent(name)}/promote`, { version, env, acknowledge_risk: !!ack });
+      status(`${name} ${version} is now in ${env}`, "good"); await openAgent(name);
+    } catch (e) {
+      if (/acknowledge_risk/.test(e.message) && confirm(e.message + "\n\nPromote anyway?")) return promote(name, version, env, true);
+      status(e.message, "bad");
+    }
+  }
+  $("compare").addEventListener("click", async () => {
+    if (!current) return;
+    const d = await api("GET", `/v1/agents/${encodeURIComponent(current)}/diff?old=${$("from").value}&new=${$("to").value}`);
+    const box = $("diff"); box.replaceChildren();
+    if (d.risks.length) {
+      const t = el("table"); t.append(Object.assign(el("tr"), {}));
+      t.firstChild.append(el("th", "Risk"), el("th", "Finding"));
+      for (const r of d.risks) { const tr = el("tr"); tr.append(el("td", r.level, "risk-" + r.level), el("td", r.message)); t.append(tr); }
+      box.append(t);
+    } else box.append(el("p", "No risky changes.", "muted"));
+    const t = el("table"); const h = el("tr"); h.append(el("th", "Change"), el("th", "Item")); t.append(h);
+    for (const c of d.changes) { const tr = el("tr"); tr.append(el("td", `${c.kind} ${c.action}`), el("td", c.item + (c.detail ? " · " + c.detail : ""))); t.append(tr); }
+    box.append(t);
+  });
+
+  loadAgents().catch((e) => status(e.message, "bad"));
+})();
+</script>
+</body>
+</html>

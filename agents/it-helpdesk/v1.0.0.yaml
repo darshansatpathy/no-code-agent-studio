@@ -1,0 +1,130 @@
+apiVersion: studio/v1
+kind: Agent
+metadata:
+  name: it-helpdesk
+  version: 1.0.0
+  description: Unlocks accounts and sends password resets; opens a ticket for anything else.
+  owner: it-service-desk
+  labels: {domain: it, tier: internal}
+
+spec:
+  input:
+    user_id: string
+    message: string
+
+  state:
+    intent: {type: string, default: ""}
+    user: {type: object}
+    ticket: {type: object}
+    reply: {type: string, default: ""}
+    error: {type: string, default: ""}
+
+  tools:
+    - use: directory.lookup_user
+    - use: directory.unlock_account
+      approval: "user.privileged == true"
+    - use: directory.reset_password
+      approval: "user.privileged == true"
+    - use: tickets.create_ticket
+      limits:
+        priority: {one_of: [low, normal]}
+
+  limits: {max_steps: 12, max_tool_calls: 4}
+  entry: classify
+
+  nodes:
+    - id: classify
+      type: classify
+      input: input.message
+      output: intent
+      labels:
+        account_locked: [locked, unlock, "locked out"]
+        password_reset: [password, reset, forgot]
+      default: other
+
+    - id: lookup
+      type: tool
+      tool: directory.lookup_user
+      args: {user_id: input.user_id}
+      output: user
+      on_error: not_found
+
+    - id: unlock
+      type: tool
+      tool: directory.unlock_account
+      args: {user_id: input.user_id}
+      on_error: ticket
+
+    - id: reset
+      type: tool
+      tool: directory.reset_password
+      args: {user_id: input.user_id}
+      on_error: ticket
+
+    - id: ticket
+      type: tool
+      tool: tickets.create_ticket
+      args: {user_id: input.user_id, summary: input.message, priority: "'normal'"}
+      output: ticket
+
+    - id: done_unlock
+      type: respond
+      template: "Hi {{ user.name }}, your account is unlocked. You can sign in again now."
+
+    - id: done_reset
+      type: respond
+      template: "Hi {{ user.name }}, we have sent a password reset link to your work email."
+
+    - id: done_ticket
+      type: respond
+      template: "Hi {{ coalesce(user.name, 'there') }}, we have opened ticket {{ ticket.id }} and someone from the service desk will contact you."
+
+    - id: not_found
+      type: respond
+      template: "We could not find your account. Please contact the service desk by phone."
+
+  edges:
+    - {from: classify, to: lookup}
+    - {from: lookup, to: unlock, when: "intent == 'account_locked' and user.locked"}
+    - {from: lookup, to: reset, when: "intent == 'password_reset'"}
+    - {from: lookup, to: ticket}
+    - {from: unlock, to: done_unlock}
+    - {from: reset, to: done_reset}
+    - {from: ticket, to: done_ticket}
+    - {from: done_unlock, to: END}
+    - {from: done_reset, to: END}
+    - {from: done_ticket, to: END}
+    - {from: not_found, to: END}
+
+  tests:
+    - name: locked account is unlocked
+      input: {user_id: U-100, message: "I am locked out of my account"}
+      expect:
+        path: [classify, lookup, unlock, done_unlock]
+        tools: [directory.lookup_user, directory.unlock_account]
+        reply_contains: ["Asha Rao", "unlocked"]
+    - name: password reset link
+      input: {user_id: U-103, message: "I forgot my password"}
+      expect:
+        tools: [directory.lookup_user, directory.reset_password]
+        reply_contains: ["reset link"]
+    - name: privileged account waits for approval
+      input: {user_id: U-101, message: "My account is locked"}
+      expect: {status: awaiting_approval, not_tools: [directory.unlock_account]}
+    - name: privileged unlock after approval
+      input: {user_id: U-101, message: "My account is locked"}
+      approvals: [true]
+      expect: {tools: [directory.lookup_user, directory.unlock_account], reply_contains: [unlocked]}
+    - name: denied approval falls back to a ticket
+      input: {user_id: U-101, message: "My account is locked"}
+      approvals: [false]
+      expect: {path: [classify, lookup, unlock, ticket, done_ticket], not_tools: [directory.unlock_account]}
+    - name: disabled account gets a ticket
+      input: {user_id: U-102, message: "unlock my account please"}
+      expect: {path: [classify, lookup, ticket, done_ticket], reply_contains: [INC-]}
+    - name: other requests open a ticket
+      input: {user_id: U-103, message: "My monitor flickers"}
+      expect: {tools: [directory.lookup_user, tickets.create_ticket], state: {intent: other}}
+    - name: unknown user
+      input: {user_id: U-999, message: "locked out"}
+      expect: {path: [classify, lookup, not_found], reply_contains: ["could not find"]}
