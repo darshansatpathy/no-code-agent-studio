@@ -11,6 +11,9 @@
 and released like software: immutable versions, dev → staging → prod, test gates, a
 risk review on every promotion, and an audit trail.**
 
+> Reference implementation built on synthetic or public data. It distils patterns from production
+> work into code you can run and read; it is not a client system.
+
 Teams want to build agents without writing Python, and platform owners want to know
 exactly what those agents can do. This studio gives both: a spec says which nodes run,
 which tools they may call, with what limits, and when a person must approve. The platform
